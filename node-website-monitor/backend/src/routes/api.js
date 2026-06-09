@@ -1,0 +1,512 @@
+const express = require('express');
+const router = express.Router();
+const {
+  triggerAudit,
+  getDashboardStats,
+  getWordPressDetails,
+  getAlerts,
+  resolveAlert,
+  getMonitoredTargets
+} = require('../controllers/monitorController');
+const {
+  getSettings,
+  saveSettings,
+  testEmail
+} = require('../controllers/settingsController');
+
+// Immediate Site Audit Trigger
+router.post('/audit', triggerAudit);
+
+// Full-website deep crawl (page + image discovery across entire site)
+router.post('/crawl', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'Missing target URL in request body.' });
+  try {
+    const { crawlWebsite } = require('../services/pageAnalysisService');
+    const normalizedUrl = url.startsWith('http') ? url : `https://${url}`;
+    const result = await crawlWebsite(normalizedUrl, '');
+    res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    res.status(500).json({ error: `Crawl failed: ${err.message}` });
+  }
+});
+
+// Dashboard stats & historical graphs payload
+router.get('/stats', getDashboardStats);
+
+// Unique monitored target domains list
+router.get('/targets', getMonitoredTargets);
+
+// Wordpress details
+router.get('/wordpress', getWordPressDetails);
+
+// SRE alerts logs
+router.get('/alerts', getAlerts);
+
+// Resolve active alerts
+router.post('/alerts/resolve', resolveAlert);
+
+// SRE Settings & Alert configurations
+router.get('/settings', getSettings);
+router.post('/settings', saveSettings);
+
+// SMTP Test email connection
+router.post('/send-test-email', testEmail);
+router.post('/send-test-email/', testEmail);
+
+// ── Per-website email configuration (NEW) ────────────────────────────────────
+router.get('/email-config', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).json({ error: 'URL required.' });
+  try {
+    const { WebsiteEmailConfig } = require('../models/Schemas');
+    const config = await WebsiteEmailConfig.findOne({ url }) || { url, alertEmail: '', alertsEnabled: false, alertFrequency: 'instant', totalEmailsSent: 0, lastEmailSent: null, lastAlertType: '' };
+    res.status(200).json(config);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/email-config', async (req, res) => {
+  const { url, alertEmail, alertsEnabled, alertFrequency } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required.' });
+  // Basic email validation
+  if (alertEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(alertEmail)) {
+    return res.status(400).json({ error: 'Invalid email address format.' });
+  }
+  try {
+    const { WebsiteEmailConfig } = require('../models/Schemas');
+    const config = await WebsiteEmailConfig.findOneAndUpdate(
+      { url },
+      { alertEmail: alertEmail || '', alertsEnabled: !!alertsEnabled, alertFrequency: alertFrequency || 'instant', updatedAt: new Date() },
+      { upsert: true, new: true }
+    );
+    res.status(200).json({ success: true, config });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Email alert history (NEW) ─────────────────────────────────────────────────
+router.get('/email-history', async (req, res) => {
+  const { url } = req.query;
+  try {
+    const { EmailAlertHistory } = require('../models/Schemas');
+    const query = url ? { url } : {};
+    const history = await EmailAlertHistory.find(query).sort({ sentAt: -1 }).limit(50);
+    res.status(200).json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Test email for specific website (NEW) ─────────────────────────────────────
+router.post('/test-site-email', async (req, res) => {
+  const { url } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required.' });
+  try {
+    const { WebsiteEmailConfig, EmailAlertHistory } = require('../models/Schemas');
+    const { enqueueEmailAlert } = require('../services/emailService');
+
+    const config = await WebsiteEmailConfig.findOne({ url });
+    if (!config || !config.alertEmail) {
+      return res.status(400).json({ success: false, error: 'No alert email configured for this website. Save an email address in the Email Alerts tab first.' });
+    }
+
+    const recipient = config.alertEmail;
+    const subject   = '[Website Monitor] Test Alert — Email Alerts are Working';
+    const html = `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:20px;background:#f8fafc;">
+      <div style="max-width:560px;margin:0 auto;background:white;border-radius:12px;border:1px solid #e2e8f0;overflow:hidden;">
+        <div style="background:#4f46e5;color:white;padding:20px 24px;">
+          <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.1em;opacity:0.8;margin-bottom:4px;">Website Monitor</div>
+          <div style="font-size:18px;font-weight:800;">Test Email — Alerts Working ✓</div>
+        </div>
+        <div style="padding:24px;font-size:14px;color:#334155;line-height:1.6;">
+          <p style="margin:0 0 16px;">Your email alert system is configured correctly and working.</p>
+          <div style="background:#f1f5f9;border-radius:8px;padding:12px 16px;font-size:12px;font-family:monospace;">
+            <strong>Website:</strong> ${url}<br>
+            <strong>Alert Email:</strong> ${recipient}<br>
+            <strong>Status:</strong> Alerts Enabled<br>
+            <strong>Sent At:</strong> ${new Date().toLocaleString()}
+          </div>
+          <p style="margin:16px 0 0;color:#64748b;font-size:12px;">
+            Future alerts for this website will be automatically sent to this address when issues are detected.
+          </p>
+        </div>
+        <div style="background:#f8fafc;border-top:1px solid #e2e8f0;padding:12px 24px;font-size:10px;color:#94a3b8;text-align:center;">
+          MonitorPro SRE Dashboard · Automated Alert System
+        </div>
+      </div>
+    </body></html>`;
+
+    // Enqueue the email alert in the background queue
+    const doc = await enqueueEmailAlert({
+      url,
+      recipient,
+      category: 'test',
+      level: 'info',
+      subject,
+      message: 'Test email enqueued successfully.',
+      html
+    });
+
+    // Await delivery status resolution (up to 15 seconds)
+    let finalDoc = doc;
+    const startTime = Date.now();
+    while (finalDoc && finalDoc.status === 'sending' && (Date.now() - startTime < 15000)) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      finalDoc = await EmailAlertHistory.findOne({ _id: doc._id });
+    }
+
+    if (!finalDoc || finalDoc.status === 'failed') {
+      const errorMsg = finalDoc?.errorReason || 'Email delivery failed (check SMTP settings).';
+      return res.status(500).json({
+        success: false,
+        error: errorMsg
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: `✅ Test email successfully delivered to ${recipient}`
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Search History (NEW) ──────────────────────────────────────────────────────
+router.get('/search-history', async (req, res) => {
+  try {
+    const { SearchHistory } = require('../models/Schemas');
+    const history = await SearchHistory.find().sort({ searchedAt: -1 }).limit(10);
+    res.status(200).json(history);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/search-history', async (req, res) => {
+  const { query } = req.body;
+  if (!query || !query.trim()) {
+    return res.status(400).json({ error: 'Search query required.' });
+  }
+  try {
+    const { SearchHistory } = require('../models/Schemas');
+    const search = await SearchHistory.create({ query: query.trim(), searchedAt: new Date() });
+    res.status(200).json({ success: true, search });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Toggle Scanned Website Favorite (NEW) ────────────────────────────────────
+router.post('/scanned-websites/favorite', async (req, res) => {
+  const { url, isFavorite } = req.body;
+  if (!url) return res.status(400).json({ error: 'URL required.' });
+  try {
+    const { ScannedWebsite } = require('../models/Schemas');
+    const website = await ScannedWebsite.findOneAndUpdate(
+      { url },
+      { isFavorite: !!isFavorite },
+      { upsert: true, new: true }
+    );
+    res.status(200).json({ success: true, website });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── Image Metadata Proxy (NEW) ───────────────────────────────────────────────
+const axiosLib = require('axios');
+const httpsLib = require('https');
+const imageAgent = new httpsLib.Agent({ rejectUnauthorized: false });
+
+const fetchSingleImageMetadata = async (imageUrl, baseUrl = '') => {
+  let resolvedUrl = imageUrl;
+  
+  // Resolve relative URL using baseUrl if possible
+  if (baseUrl && !/^https?:\/\//i.test(imageUrl)) {
+    try {
+      resolvedUrl = new URL(imageUrl, baseUrl).href;
+    } catch (e) {
+      // ignore parsing issues, fallback to imageUrl
+    }
+  }
+
+  if (!resolvedUrl || !/^https?:\/\//i.test(resolvedUrl)) {
+    return {
+      imageUrl,
+      contentLength: null,
+      actualFileSize: 0,
+      format: 'png',
+      success: false,
+      isValid: false,
+      httpStatus: null,
+      errorReason: 'Access Denied'
+    };
+  }
+
+  let contentLength = null;
+  let actualFileSize = null;
+  let format = null;
+  let httpStatus = null;
+  let errorReason = null;
+  let contentType = '';
+  let downloadedBytes = 0;
+
+  // Helper to extract extension
+  const getFormatFromUrlOrHeaders = (urlStr, typeHeader) => {
+    if (typeHeader) {
+      const type = typeHeader.toLowerCase();
+      if (type.includes('image/png')) return 'png';
+      if (type.includes('image/jpeg') || type.includes('image/jpg')) return 'jpg';
+      if (type.includes('image/gif')) return 'gif';
+      if (type.includes('image/webp')) return 'webp';
+      if (type.includes('image/svg') || type.includes('image/svg+xml')) return 'svg';
+      if (type.includes('image/avif')) return 'avif';
+    }
+    const parts = urlStr.split('?')[0].split('/');
+    const filename = parts.pop() || '';
+    const ext = filename.split('.').pop()?.toLowerCase();
+    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif'].includes(ext)) {
+      return ext === 'jpeg' ? 'jpg' : ext;
+    }
+    return null;
+  };
+
+  // 1. Try HEAD request first
+  try {
+    const headResponse = await axiosLib.head(resolvedUrl, {
+      timeout: 3000,
+      httpsAgent: imageAgent,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MonitorProSRE/1.0',
+        'Accept': 'image/*'
+      },
+      validateStatus: () => true
+    });
+
+    httpStatus = headResponse.status;
+
+    if (headResponse.status === 200) {
+      contentType = (headResponse.headers['content-type'] || '').toLowerCase();
+      // Accept image/* OR application/octet-stream (CDNs often serve images this way)
+      // Also accept if content-type is empty but URL has image extension
+      const urlFormat = getFormatFromUrlOrHeaders(resolvedUrl, null);
+      const isImageByContentType = contentType.startsWith('image/');
+      const isOctetStream = contentType.startsWith('application/octet-stream') || contentType === '';
+      const isImageByUrl = !!urlFormat;
+
+      if (isImageByContentType || (isOctetStream && isImageByUrl)) {
+        format = getFormatFromUrlOrHeaders(resolvedUrl, isImageByContentType ? contentType : null) || urlFormat;
+        const cl = headResponse.headers['content-length'];
+        if (cl) {
+          const parsedLen = parseInt(cl, 10);
+          if (!isNaN(parsedLen) && parsedLen > 0) {
+            contentLength = parsedLen;
+            actualFileSize = parsedLen;
+          }
+        }
+        // If no content-length in HEAD, leave actualFileSize null so GET runs to download bytes
+      } else {
+        // Not a recognizable image — don't set errorReason here yet, let GET confirm
+        // (some servers return text/html on HEAD but serve images on GET)
+        errorReason = null;
+      }
+    } else if (headResponse.status === 404) {
+      errorReason = '404 Not Found';
+    } else if (headResponse.status === 403) {
+      errorReason = 'Access Denied';
+    } else {
+      // Other statuses: let GET try as well, don't prematurely block
+      errorReason = null;
+    }
+  } catch (err) {
+    if (err.response) {
+      httpStatus = err.response.status;
+      if (httpStatus === 404) errorReason = '404 Not Found';
+      else if (httpStatus === 403) errorReason = 'Access Denied';
+    }
+  }
+
+  // 2. Try GET request if HEAD didn't yield file size or failed/blocked
+  if (actualFileSize === null) {
+    try {
+      const getResponse = await axiosLib.get(resolvedUrl, {
+        timeout: 8000,
+        responseType: 'arraybuffer',
+        maxContentLength: 10 * 1024 * 1024, // cap at 10 MB to avoid hanging
+        httpsAgent: imageAgent,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MonitorProSRE/1.0',
+          'Accept': 'image/*'
+        },
+        validateStatus: () => true
+      });
+
+      httpStatus = getResponse.status;
+
+      if (getResponse.status === 200) {
+        contentType = (getResponse.headers['content-type'] || '').toLowerCase();
+        const urlFormat = getFormatFromUrlOrHeaders(resolvedUrl, null);
+        const isImageByContentType = contentType.startsWith('image/');
+        const isOctetStream = contentType.startsWith('application/octet-stream') || contentType === '';
+        const isImageByUrl = !!urlFormat;
+
+        if (isImageByContentType || (isOctetStream && isImageByUrl)) {
+          format = getFormatFromUrlOrHeaders(resolvedUrl, isImageByContentType ? contentType : null) || urlFormat;
+          const cl = getResponse.headers['content-length'];
+          if (cl) {
+            const parsedLen = parseInt(cl, 10);
+            if (!isNaN(parsedLen) && parsedLen > 0) {
+              contentLength = parsedLen;
+            }
+          }
+          if (getResponse.data) {
+            // Buffer.byteLength is the correct method for arraybuffer in Node.js
+            // Support both Buffer (.length) and ArrayBuffer (.byteLength)
+            if (Buffer.isBuffer(getResponse.data)) {
+              downloadedBytes = getResponse.data.length;
+            } else if (getResponse.data.byteLength !== undefined) {
+              downloadedBytes = getResponse.data.byteLength;
+            } else {
+              downloadedBytes = getResponse.data.length || 0;
+            }
+            if (downloadedBytes > 0) {
+              actualFileSize = downloadedBytes;
+              errorReason = null; // clear any error from HEAD stage — GET succeeded
+            } else {
+              errorReason = errorReason || 'Empty response body';
+            }
+          }
+        } else {
+          // Server returned non-image content on GET — confirm it's not an image URL
+          errorReason = 'Not an image (Content-Type: ' + (contentType || 'unknown') + ')';
+        }
+      } else if (getResponse.status === 404) {
+        errorReason = '404 Not Found';
+      } else if (getResponse.status === 403) {
+        errorReason = 'Access Denied';
+      } else {
+        errorReason = 'Access Denied';
+      }
+    } catch (err) {
+      if (err.response) {
+        httpStatus = err.response.status;
+        if (httpStatus === 404) errorReason = '404 Not Found';
+        else if (httpStatus === 403) errorReason = 'Access Denied';
+      }
+      // If axios threw because maxContentLength was exceeded, the image is real but very large.
+      // In that case try to use content-length from the error response headers if available.
+      if (err.code === 'ERR_FR_MAX_BODY_LENGTH_EXCEEDED' || (err.message && err.message.includes('maxContentLength'))) {
+        const errHeaders = err.response?.headers || {};
+        const cl = errHeaders['content-length'];
+        if (cl) {
+          const parsedLen = parseInt(cl, 10);
+          if (!isNaN(parsedLen) && parsedLen > 0) {
+            actualFileSize = parsedLen;
+            contentLength = parsedLen;
+            errorReason = null;
+          }
+        }
+      }
+      if (!errorReason && actualFileSize === null) {
+        errorReason = 'Access Denied';
+      }
+    }
+  }
+
+  // Ensure format fallback
+  if (!format) {
+    format = getFormatFromUrlOrHeaders(resolvedUrl, null) || 'png';
+  }
+
+  const isValid = actualFileSize !== null && actualFileSize > 0 && !errorReason;
+
+  if (!isValid && !errorReason) {
+    if (httpStatus === 404) errorReason = '404 Not Found';
+    else if (httpStatus === 403) errorReason = 'Access Denied (403 Forbidden)';
+    else if (httpStatus === 401) errorReason = 'Access Denied (401 Unauthorized)';
+    else if (httpStatus === 500) errorReason = 'Server Error (500)';
+    else if (httpStatus && httpStatus !== 200) errorReason = `HTTP ${httpStatus} Error`;
+    else errorReason = 'Access Denied';
+  }
+
+  const formatLower = (format || '').toLowerCase();
+  let savingsPct = 0;
+  let recommendedSize = actualFileSize || 0;
+  let savingsBytes = 0;
+  
+  if (isValid && actualFileSize > 0) {
+    let reduction = 0;
+    // PNG: WebP conversion — 40%–80% savings
+    if (formatLower === 'png') {
+      reduction = Math.min(0.80, 0.40 + (actualFileSize / (1024 * 1024)) * 0.40);
+    // JPEG/JPG: compression — 20%–70% savings
+    } else if (formatLower === 'jpg' || formatLower === 'jpeg') {
+      reduction = Math.min(0.70, 0.20 + (actualFileSize / (1024 * 1024)) * 0.50);
+    // GIF: WebP/MP4 conversion — 50%–90% savings
+    } else if (formatLower === 'gif') {
+      reduction = Math.min(0.90, 0.50 + (actualFileSize / (2 * 1024 * 1024)) * 0.40);
+    // SVG: minification only — 5%–30% savings
+    } else if (formatLower === 'svg') {
+      reduction = Math.min(0.30, 0.05 + (actualFileSize / (100 * 1024)) * 0.25);
+    // WebP: already modern — minimal 5%
+    } else if (formatLower === 'webp') {
+      reduction = 0.05;
+    // AVIF: already optimized — no savings
+    } else if (formatLower === 'avif') {
+      reduction = 0.0;
+    } else {
+      reduction = 0.10;
+    }
+    recommendedSize = Math.round(actualFileSize * (1 - reduction));
+    savingsPct = Math.round(reduction * 100);
+    savingsBytes = actualFileSize - recommendedSize;
+  }
+
+  // Debug logging
+  console.log(`[IMAGE DEBUG] Image URL: ${imageUrl}`);
+  if (resolvedUrl !== imageUrl) {
+    console.log(`[IMAGE DEBUG] Resolved URL: ${resolvedUrl}`);
+  }
+  console.log(`[IMAGE DEBUG] HTTP Status: ${httpStatus}`);
+  console.log(`[IMAGE DEBUG] Content-Type: ${contentType}`);
+  console.log(`[IMAGE DEBUG] Content-Length: ${contentLength}`);
+  console.log(`[IMAGE DEBUG] Downloaded Bytes: ${downloadedBytes}`);
+  console.log(`[IMAGE DEBUG] Calculated Original Size: ${actualFileSize}`);
+  console.log(`[IMAGE DEBUG] Calculated Recommended Size: ${recommendedSize}`);
+  console.log(`[IMAGE DEBUG] Calculated Savings: ${savingsBytes} bytes (${savingsPct}%)`);
+
+  return {
+    imageUrl,
+    contentLength,
+    actualFileSize: actualFileSize || 0,
+    recommendedSize: isValid ? recommendedSize : 0,
+    savingsBytes: isValid ? savingsBytes : 0,
+    savingsPct: isValid ? savingsPct : 0,
+    format,
+    success: isValid,
+    httpStatus,
+    isValid,
+    errorReason: isValid ? null : errorReason
+  };
+};
+
+router.post('/image-metadata', async (req, res) => {
+  const { urls, baseUrl } = req.body;
+  if (!urls || !Array.isArray(urls)) {
+    return res.status(400).json({ error: 'Array of image URLs is required in request body.' });
+  }
+
+  try {
+    const results = await Promise.all(urls.map(url => fetchSingleImageMetadata(url, baseUrl)));
+    res.status(200).json({ success: true, results });
+  } catch (err) {
+    res.status(500).json({ error: `Image metadata fetch failed: ${err.message}` });
+  }
+});
+
+module.exports = router;
+
