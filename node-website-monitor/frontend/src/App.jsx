@@ -788,15 +788,15 @@ export default function App() {
         {activeTab !== 'admin' && (
         <div className="flex flex-wrap border-b border-slate-800/80 mb-6 animate-fade-in-up" style={{ animationDelay: '0.05s' }}>
           {[
-            { id: 'uptime',        label: 'Uptime & Logs' },
-            { id: 'wordpress',     label: 'WordPress CMS' },
-            { id: 'ssl',           label: 'SSL & Security' },
-            { id: 'seo',           label: 'SEO Optimization' },
-            { id: 'accessibility', label: 'Accessibility' },
-            { id: 'site_analysis', label: 'Site Analysis' },
+            { id: 'uptime',         label: 'Uptime & Logs' },
+            { id: 'site_analysis',  label: 'Site Analysis' },
+            { id: 'seo',            label: 'SEO Optimization' },
+            { id: 'ssl',            label: 'SSL & Security' },
             { id: 'image_analyzer', label: 'Image Optimization Analyzer' },
-            { id: 'email_alerts',  label: 'Email Alerts' },
-            { id: 'settings',      label: 'Gmail & Alerts' },
+            { id: 'accessibility',  label: 'Accessibility' },
+            { id: 'wordpress',      label: 'WordPress CMS' },
+            { id: 'email_alerts',   label: 'Email Alerts' },
+            { id: 'settings',       label: 'Gmail & Alerts' },
           ].map(tab => (
             <button
               key={tab.id}
