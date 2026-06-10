@@ -1,7 +1,8 @@
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
-import { ShieldCheck, ShieldAlert, Activity, Cpu, Search, RefreshCw, AlertTriangle, AlertCircle, BellRing, Sun, Moon, X, Clock, Star } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Activity, Cpu, Search, RefreshCw, AlertTriangle, AlertCircle, BellRing, Sun, Moon, X, Clock, Star, Menu, BarChart2, Globe, Shield, Image as ImageIcon, Eye, Layers, Mail, Settings } from 'lucide-react';
 import UptimeDashboard from './components/UptimeDashboard';
 import WordPressDashboard from './components/WordPressDashboard';
 import SSLMonitor from './components/SSLMonitor';
@@ -102,6 +103,8 @@ export default function App() {
   const [isSocketConnected, setIsSocketConnected] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
   const [isDark, setIsDark] = useState(true);
+  // Sidebar open/close for mobile drawer
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Load auth from localStorage on mount
   useEffect(() => {
@@ -546,17 +549,27 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen text-slate-100 font-sans pb-12 relative overflow-hidden">
+    <div className="min-h-screen text-slate-100 font-sans relative overflow-hidden">
 
       {/* Premium Ambient Background Glows */}
       <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[55%] rounded-full bg-indigo-600/8 blur-[130px] pointer-events-none pulse-glow-indigo"></div>
       <div className="absolute bottom-[-5%] right-[-5%] w-[45%] h-[50%] rounded-full bg-purple-600/8 blur-[130px] pointer-events-none pulse-glow-indigo" style={{ animationDelay: '-2s' }}></div>
 
-      {/* Sleek Dark SRE Navigation Header */}
+      {/* ── TOP HEADER ──────────────────────────────────────────────────── */}
       <header className="bg-dark-800/80 backdrop-blur-md border-b border-slate-800/60 sticky top-0 z-50 shadow-md">
-        <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between gap-6">
+        <div className="px-4 md:px-6 h-16 flex items-center justify-between gap-4">
 
-          <div className="flex items-center gap-4">
+          {/* Left: Logo + hamburger (mobile) */}
+          <div className="flex items-center gap-3">
+            {/* Hamburger — only visible on mobile */}
+            <button
+              className="md:hidden p-2 rounded-xl border border-slate-800 hover:bg-slate-800/60 transition-all text-slate-400 hover:text-slate-200 cursor-pointer"
+              onClick={() => setSidebarOpen(v => !v)}
+              aria-label="Toggle navigation"
+            >
+              <Menu className="h-4 w-4" />
+            </button>
+
             <div className="flex items-center gap-2">
               <div className="h-8 w-8 rounded-lg bg-gradient-to-tr from-indigo-700 to-indigo-500 flex items-center justify-center font-black text-white shadow-lg shadow-indigo-600/25 shrink-0">
                 M
@@ -566,6 +579,7 @@ export default function App() {
                 <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block -mt-1">Node SRE Module</span>
               </div>
             </div>
+
             <button
               onClick={() => setIsDark(!isDark)}
               className="p-2 rounded-xl border border-slate-800 hover:bg-slate-800/60 transition-all text-slate-400 hover:text-slate-200 cursor-pointer shadow-sm hover:scale-105 duration-200"
@@ -575,7 +589,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* SRE Domain search filter bar */}
+          {/* Right: Search bar + action buttons */}
           <div className="flex-1 max-w-xl flex gap-2">
             <div className="relative flex-1 group" ref={searchRef}>
               <div className="bg-dark-900 border border-slate-800 focus-within:border-indigo-500/50 rounded-xl px-3.5 flex items-center gap-2 w-full transition-all">
@@ -627,13 +641,10 @@ export default function App() {
                 )}
               </div>
 
-              {/* Autocomplete dropdown — wrapped in error boundary so render errors
-                  in dropdown items never blank the whole page */}
+              {/* Autocomplete dropdown */}
               {showDropdown && (dropdownGroups.favorites.length > 0 || dropdownGroups.monitored.length > 0 || dropdownGroups.recent.length > 0) && (
                 <SearchErrorBoundary>
                 <div className="absolute top-full left-0 right-0 mt-1.5 z-[9999] rounded-xl border border-slate-700/80 overflow-hidden shadow-2xl bg-slate-900 sre-dropdown max-h-96 overflow-y-auto">
-                  
-                  {/* Favorites Section */}
                   {dropdownGroups.favorites.length > 0 && (
                     <div>
                       <div className="px-3 py-1.5 border-b border-slate-800/60 bg-slate-950/20 flex items-center justify-between">
@@ -647,8 +658,6 @@ export default function App() {
                       })}
                     </div>
                   )}
-
-                  {/* Most Monitored Section */}
                   {dropdownGroups.monitored.length > 0 && (
                     <div className="border-t border-slate-850/50">
                       <div className="px-3 py-1.5 border-b border-slate-800/60 bg-slate-950/20 flex items-center justify-between">
@@ -662,33 +671,22 @@ export default function App() {
                       })}
                     </div>
                   )}
-
-                  {/* Recent Searches Section */}
                   {dropdownGroups.recent.length > 0 && (
                     <div className="border-t border-slate-850/50">
                       <div className="px-3 py-1.5 border-b border-slate-800/60 bg-slate-950/20 flex items-center justify-between">
                         <span className="text-[9px] font-black text-slate-450 uppercase tracking-widest">⏱️ Recent Searches</span>
                       </div>
                       {dropdownGroups.recent.map((h, index) => {
-                        // Guard: skip if history item is malformed
                         if (!h || !h.query) return null;
                         const flatIndex = dropdownGroups.flat.findIndex(f => f.type === 'history' && f.data._id === h._id);
                         const isSelected = flatIndex === dropdownSelectedIndex;
-                        // Safe date formatting — avoid crash on missing/invalid searchedAt
                         let timeLabel = '';
-                        try {
-                          if (h.searchedAt) timeLabel = new Date(h.searchedAt).toLocaleTimeString();
-                        } catch (e) {}
+                        try { if (h.searchedAt) timeLabel = new Date(h.searchedAt).toLocaleTimeString(); } catch (e) {}
                         return (
                           <button
                             key={`hist-${h._id || index}`}
                             className={`w-full flex items-center gap-3 px-3.5 py-2.5 transition-colors text-left group ${isSelected ? 'bg-indigo-650/15 text-indigo-300' : 'hover:bg-slate-800/40 text-slate-350'}`}
-                            onMouseDown={(e) => {
-                              e.preventDefault();
-                              setUrl(h.query);
-                              setShowDropdown(false);
-                              fetchStats(h.query);
-                            }}
+                            onMouseDown={(e) => { e.preventDefault(); setUrl(h.query); setShowDropdown(false); fetchStats(h.query); }}
                             onMouseEnter={() => setDropdownSelectedIndex(flatIndex)}
                           >
                             <Clock className="h-3.5 w-3.5 text-slate-500 shrink-0" />
@@ -699,7 +697,6 @@ export default function App() {
                       })}
                     </div>
                   )}
-
                   <div className="px-3 py-1.5 bg-slate-950/40 border-t border-slate-800/40 text-center">
                     <span className="text-[9px] text-slate-600 font-mono">Use ↑ ↓ Keys & Enter to Select · Star to Pin</span>
                   </div>
@@ -719,17 +716,9 @@ export default function App() {
             <button
               onClick={() => {
                 setAutoRefresh(!autoRefresh);
-                showToast(
-                  !autoRefresh
-                    ? '15s SRE auto-polling active.'
-                    : 'Auto-polling disabled.',
-                  'info'
-                );
+                showToast(!autoRefresh ? '15s SRE auto-polling active.' : 'Auto-polling disabled.', 'info');
               }}
-              className={`px-4 py-2 border rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.02] active:scale-[0.98] ${autoRefresh
-                  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                  : 'bg-dark-800 border-slate-700/80 hover:bg-dark-700/60'
-                }`}
+              className={`px-4 py-2 border rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm cursor-pointer hover:scale-[1.02] active:scale-[0.98] ${autoRefresh ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' : 'bg-dark-800 border-slate-700/80 hover:bg-dark-700/60'}`}
             >
               <span>{autoRefresh ? 'Stop Monitor' : 'Auto-Monitor'}</span>
             </button>
@@ -747,190 +736,238 @@ export default function App() {
         </div>
       </header>
 
-      {/* Central workspace contents wrapper */}
-      <main className="max-w-7xl mx-auto px-6 mt-8 relative z-10">
+      {/* ── BODY: sidebar + main content ─────────────────────────────────── */}
+      <div className="flex relative z-10" style={{ minHeight: 'calc(100vh - 64px)' }}>
 
-        {error && (
-          <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl flex items-center gap-3 text-sm animate-fade-in-up">
-            <AlertCircle className="h-5 w-5 shrink-0" />
-            <div>
-              <strong>System Error:</strong> {error}
-            </div>
-          </div>
+        {/* ── MOBILE OVERLAY ── */}
+        {sidebarOpen && (
+          <div
+            className="fixed inset-0 bg-black/60 z-40 md:hidden"
+            onClick={() => setSidebarOpen(false)}
+          />
         )}
 
-        {/* Audit Target Status Header */}
-        {stats && (
-          <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 glass-card p-6 rounded-2xl animate-fade-in-up">
-            <div>
-              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block mb-1">AUDIT TARGET SOURCE</span>
-              <h2 className="text-xl font-extrabold text-slate-200 tracking-tight">{stats.url}</h2>
-            </div>
+        {/* ── LEFT SIDEBAR ──────────────────────────────────────────────── */}
+        <aside className={`
+          fixed md:sticky top-16 z-40 md:z-auto
+          h-[calc(100vh-64px)] md:h-[calc(100vh-64px)]
+          w-56 shrink-0
+          bg-dark-800/95 md:bg-dark-800/60
+          backdrop-blur-md
+          border-r border-slate-800/60
+          flex flex-col
+          transition-transform duration-300 ease-in-out
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+          overflow-y-auto
+        `}>
 
-            <div className="flex gap-6">
-              <div className="text-right">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Core Status</span>
-                <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] mt-1.5 tracking-wider ${stats.latestStatus?.isUp ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25' : 'bg-rose-500/10 text-rose-400 border border-rose-500/25'}`}>
-                  {stats.latestStatus?.isUp ? 'ACTIVE' : 'DOWN'}
-                </span>
-              </div>
-              <div className="text-right">
-                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">WordPress Core</span>
-                <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] mt-1.5 tracking-wider ${stats.wordpress?.isWordPress ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25' : 'bg-slate-800 text-slate-400 border border-slate-750'}`}>
-                  {stats.wordpress?.isWordPress ? 'DETECTED' : 'NONE'}
-                </span>
-              </div>
-            </div>
+          {/* Mobile close button */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800/60 md:hidden">
+            <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Navigation</span>
+            <button onClick={() => setSidebarOpen(false)} className="text-slate-500 hover:text-slate-200 transition-colors">
+              <X className="h-4 w-4" />
+            </button>
           </div>
-        )}
 
-        {/* Tab Module Switcher ΓÇö hidden when Admin Dashboard is active */}
-        {activeTab !== 'admin' && (
-        <div className="flex flex-wrap border-b border-slate-800/80 mb-6 animate-fade-in-up" style={{ animationDelay: '0.05s' }}>
-          {[
-            { id: 'uptime',         label: 'Uptime & Logs' },
-            { id: 'site_analysis',  label: 'Site Analysis' },
-            { id: 'seo',            label: 'SEO Optimization' },
-            { id: 'ssl',            label: 'SSL & Security' },
-            { id: 'image_analyzer', label: 'Image Optimization Analyzer' },
-            { id: 'accessibility',  label: 'Accessibility' },
-            { id: 'wordpress',      label: 'WordPress CMS' },
-            { id: 'email_alerts',   label: 'Email Alerts' },
-            { id: 'settings',       label: 'Gmail & Alerts' },
-          ].map(tab => (
+          {/* Nav items */}
+          <nav className="flex flex-col gap-0.5 p-3 flex-1">
+            {[
+              { id: 'uptime',         label: 'Uptime & Logs',              icon: Activity },
+              { id: 'site_analysis',  label: 'Site Analysis',              icon: BarChart2 },
+              { id: 'seo',            label: 'SEO Optimization',           icon: Globe },
+              { id: 'ssl',            label: 'SSL & Security',             icon: Shield },
+              { id: 'image_analyzer', label: 'Image Optimization',         icon: ImageIcon },
+              { id: 'accessibility',  label: 'Accessibility',              icon: Eye },
+              { id: 'wordpress',      label: 'WordPress CMS',              icon: Layers },
+              { id: 'email_alerts',   label: 'Email Alerts',               icon: Mail },
+              { id: 'settings',       label: 'Gmail & Alerts',             icon: Settings },
+            ].map(({ id, label, icon: Icon }) => (
+              <button
+                key={id}
+                onClick={() => { setActiveTab(id); setSidebarOpen(false); }}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all cursor-pointer group w-full ${
+                  activeTab === id
+                    ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/25'
+                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
+                }`}
+              >
+                <Icon className={`h-4 w-4 shrink-0 transition-colors ${activeTab === id ? 'text-indigo-400' : 'text-slate-500 group-hover:text-slate-300'}`} />
+                <span className="text-[11px] font-bold uppercase tracking-wide leading-tight">{label}</span>
+                {activeTab === id && (
+                  <span className="ml-auto h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
+                )}
+              </button>
+            ))}
+
+            {/* Divider */}
+            <div className="my-2 border-t border-slate-800/60" />
+
+            {/* Admin Dashboard */}
             <button
-              key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-5 py-3.5 font-bold text-sm uppercase tracking-wide border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-                activeTab === tab.id
-                  ? 'border-indigo-500 text-indigo-400'
-                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              onClick={() => { setActiveTab(activeTab === 'admin' ? 'uptime' : 'admin'); setSidebarOpen(false); }}
+              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-all cursor-pointer group w-full ${
+                activeTab === 'admin'
+                  ? 'bg-indigo-500/15 text-indigo-400 border border-indigo-500/25'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50 border border-transparent'
               }`}
             >
-              {tab.label}
+              <ShieldCheck className={`h-4 w-4 shrink-0 transition-colors ${activeTab === 'admin' ? 'text-indigo-400' : 'text-slate-500 group-hover:text-slate-300'}`} />
+              <span className="text-[11px] font-bold uppercase tracking-wide leading-tight">
+                {activeTab === 'admin' ? '← Back' : 'Admin Dashboard'}
+              </span>
+              {activeTab === 'admin' && (
+                <span className="ml-auto h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0" />
+              )}
             </button>
-          ))}
-        </div>
-        )}
+          </nav>
 
-        {/* Admin Dashboard tab button ΓÇö always visible */}
-        <div className="flex mb-6 animate-fade-in-up" style={{ animationDelay: '0.05s' }}>
-          <button
-            onClick={() => setActiveTab(activeTab === 'admin' ? 'uptime' : 'admin')}
-            className={`px-5 py-3.5 font-bold text-sm uppercase tracking-wide border-b-2 transition-all cursor-pointer whitespace-nowrap ${
-              activeTab === 'admin'
-                ? 'border-indigo-500 text-indigo-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            {activeTab === 'admin' ? 'ΓåÉ Back to Dashboard' : 'Admin Dashboard'}
-          </button>
-        </div>
+          {/* Socket status indicator at bottom of sidebar */}
+          <div className="px-4 py-3 border-t border-slate-800/60 shrink-0">
+            <div className="flex items-center gap-2">
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${isSocketConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+              <span className="text-[9px] text-slate-500 font-bold uppercase tracking-widest">
+                {isSocketConnected ? 'Live WebSocket' : 'Polling Mode'}
+              </span>
+            </div>
+          </div>
+        </aside>
 
-        {/* Dynamic tabs render panel */}
-        {activeTab === 'admin' ? (
-          isAuthenticated ? (
-            <AdminDashboard adminName={adminUser} loginTime={loginTime} onLogout={handleLogout} />
-          ) : (
-            <AdminLogin onLoginSuccess={handleLoginSuccess} onCancel={() => setActiveTab('uptime')} />
-          )
-        ) : activeTab === 'settings' ? (
-          <SettingsPanel showToast={showToast} />
-        ) : activeTab === 'email_alerts' ? (
-          <EmailAlertSettings siteUrl={stats?.url || url} showToast={showToast} />
-        ) : (loading && !stats) || initializing ? (
-          <div className="py-24 text-center animate-fade-in-up">
-            <RefreshCw className="h-8 w-8 text-indigo-500 rotate-infinite mx-auto mb-4" />
-            <h4 className="font-extrabold text-slate-300">Synchronizing SRE monitoring telemetry...</h4>
-            <p className="text-xs text-slate-500 mt-1">Fetching local histories and alert logs from MongoDB</p>
-          </div>
-        ) : stats ? (
-          <div className="space-y-8">
-            {activeTab === 'uptime' && (
-              <UptimeDashboard stats={stats} isSocketConnected={isSocketConnected} onNavigateToAlt={handleNavigateToAlt} />
-            )}
-            {activeTab === 'wordpress' && (
-              <WordPressDashboard wordpressData={stats.wordpress} />
-            )}
-            {activeTab === 'ssl' && (
-              <SSLMonitor sslData={stats?.sslData} securityData={stats?.securityData} />
-            )}
-            {activeTab === 'seo' && (
-              <SeoDashboard seoData={stats?.seoData} crawlData={crawlData} onNavigateToAlt={handleNavigateToAlt} />
-            )}
-            {activeTab === 'accessibility' && (
-              <AccessibilityAudit 
-                uiUxData={stats?.uiUxData}
-                mobileFriendliness={stats?.seoData?.mobileFriendliness}
-              />
-            )}
-            {activeTab === 'site_analysis' && (
-              <SiteAnalysisDashboard
-                pageAnalysisData={stats?.pageAnalysisData}
-                seoData={stats?.seoData}
-                activeAlerts={stats?.activeAlerts}
-                crawlData={crawlData}
-                crawlLoading={crawlLoading}
-                altHighlight={siteAnalysisAltHighlight}
-              />
-            )}
-            {activeTab === 'image_analyzer' && (
-              <ImageOptimizationAnalyzer
-                stats={stats}
-                crawlData={crawlData}
-                url={stats?.url || stats?.latestStatus?.url || url}
-                isDark={isDark}
-              />
-            )}
-            {activeTab === 'malware' && (
-              <MalwareReport malwareData={stats?.malwareData} />
-            )}
-            {activeTab === 'images' && (
-              <ImageOptimization seoData={stats?.seoData} crawlData={crawlData} />
-            )}
-          </div>
-        ) : (
-          <div className="py-24 text-center glass-card border-dashed border-slate-800 rounded-3xl max-w-3xl mx-auto my-8 animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
-            <Activity className="h-10 w-10 text-slate-650 mx-auto mb-4 animate-pulse" />
-            <h4 className="font-extrabold text-slate-400">Auditer state is empty</h4>
-            <p className="text-xs text-slate-500 mt-2 max-w-md mx-auto">Please enter a valid website URL in the topbar above and click <strong className="text-indigo-455">Run Scan</strong> to launch crawler passes.</p>
-          </div>
-        )}
+        {/* ── MAIN CONTENT ──────────────────────────────────────────────── */}
+        <main className="flex-1 min-w-0 px-4 md:px-6 py-8 pb-12">
 
-        {/* Targets Switcher Pill Bar at the Bottom */}
-        <div className="mt-12 pt-6 border-t border-slate-800/80 animate-fade-in-up">
-          <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block mb-2.5">Audited Targets (Previous Links Scan History)</span>
-          <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
-            {targets.length === 0 ? (
-              <span className="text-xs text-slate-500 italic">No targets audited yet. Enter a URL above and click Run Scan.</span>
+          {error && (
+            <div className="mb-6 p-4 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-2xl flex items-center gap-3 text-sm animate-fade-in-up">
+              <AlertCircle className="h-5 w-5 shrink-0" />
+              <div><strong>System Error:</strong> {error}</div>
+            </div>
+          )}
+
+          {/* Audit Target Status Header */}
+          {stats && (
+            <div className="mb-8 flex flex-col md:flex-row justify-between items-start md:items-center gap-4 glass-card p-6 rounded-2xl animate-fade-in-up">
+              <div>
+                <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block mb-1">AUDIT TARGET SOURCE</span>
+                <h2 className="text-xl font-extrabold text-slate-200 tracking-tight">{stats.url}</h2>
+              </div>
+              <div className="flex gap-6">
+                <div className="text-right">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">Core Status</span>
+                  <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] mt-1.5 tracking-wider ${stats.latestStatus?.isUp ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25' : 'bg-rose-500/10 text-rose-400 border border-rose-500/25'}`}>
+                    {stats.latestStatus?.isUp ? 'ACTIVE' : 'DOWN'}
+                  </span>
+                </div>
+                <div className="text-right">
+                  <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block">WordPress Core</span>
+                  <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-[9px] mt-1.5 tracking-wider ${stats.wordpress?.isWordPress ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/25' : 'bg-slate-800 text-slate-400 border border-slate-750'}`}>
+                    {stats.wordpress?.isWordPress ? 'DETECTED' : 'NONE'}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Dynamic tab content panel — identical logic, zero changes */}
+          {activeTab === 'admin' ? (
+            isAuthenticated ? (
+              <AdminDashboard adminName={adminUser} loginTime={loginTime} onLogout={handleLogout} />
             ) : (
-              targets.map((tgt) => {
-                const isActive = normalizeUrlString(url) === normalizeUrlString(tgt.url);
-                return (
-                  <button
-                    key={tgt.url}
-                    onClick={() => {
-                      setUrl(tgt.url);
-                      fetchStats(tgt.url);
-                    }}
-                    className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] shrink-0 ${
-                      isActive 
-                        ? 'bg-indigo-500/10 border-indigo-500 text-indigo-400 shadow-md shadow-indigo-500/5' 
-                        : 'bg-dark-800/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
-                    }`}
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full ${tgt.isUp ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`}></span>
-                    <span>{tgt.url.replace(/^https?:\/\//i, '').replace(/\/$/, '')}</span>
-                  </button>
-                );
-              })
-            )}
+              <AdminLogin onLoginSuccess={handleLoginSuccess} onCancel={() => setActiveTab('uptime')} />
+            )
+          ) : activeTab === 'settings' ? (
+            <SettingsPanel showToast={showToast} />
+          ) : activeTab === 'email_alerts' ? (
+            <EmailAlertSettings siteUrl={stats?.url || url} showToast={showToast} />
+          ) : (loading && !stats) || initializing ? (
+            <div className="py-24 text-center animate-fade-in-up">
+              <RefreshCw className="h-8 w-8 text-indigo-500 rotate-infinite mx-auto mb-4" />
+              <h4 className="font-extrabold text-slate-300">Synchronizing SRE monitoring telemetry...</h4>
+              <p className="text-xs text-slate-500 mt-1">Fetching local histories and alert logs from MongoDB</p>
+            </div>
+          ) : stats ? (
+            <div className="space-y-8">
+              {activeTab === 'uptime' && (
+                <UptimeDashboard stats={stats} isSocketConnected={isSocketConnected} onNavigateToAlt={handleNavigateToAlt} />
+              )}
+              {activeTab === 'wordpress' && (
+                <WordPressDashboard wordpressData={stats.wordpress} />
+              )}
+              {activeTab === 'ssl' && (
+                <SSLMonitor sslData={stats?.sslData} securityData={stats?.securityData} />
+              )}
+              {activeTab === 'seo' && (
+                <SeoDashboard seoData={stats?.seoData} crawlData={crawlData} onNavigateToAlt={handleNavigateToAlt} />
+              )}
+              {activeTab === 'accessibility' && (
+                <AccessibilityAudit
+                  uiUxData={stats?.uiUxData}
+                  mobileFriendliness={stats?.seoData?.mobileFriendliness}
+                />
+              )}
+              {activeTab === 'site_analysis' && (
+                <SiteAnalysisDashboard
+                  pageAnalysisData={stats?.pageAnalysisData}
+                  seoData={stats?.seoData}
+                  activeAlerts={stats?.activeAlerts}
+                  crawlData={crawlData}
+                  crawlLoading={crawlLoading}
+                  altHighlight={siteAnalysisAltHighlight}
+                />
+              )}
+              {activeTab === 'image_analyzer' && (
+                <ImageOptimizationAnalyzer
+                  stats={stats}
+                  crawlData={crawlData}
+                  url={stats?.url || stats?.latestStatus?.url || url}
+                  isDark={isDark}
+                />
+              )}
+              {activeTab === 'malware' && (
+                <MalwareReport malwareData={stats?.malwareData} />
+              )}
+              {activeTab === 'images' && (
+                <ImageOptimization seoData={stats?.seoData} crawlData={crawlData} />
+              )}
+            </div>
+          ) : (
+            <div className="py-24 text-center glass-card border-dashed border-slate-800 rounded-3xl max-w-3xl mx-auto my-8 animate-fade-in-up" style={{ animationDelay: '0.1s' }}>
+              <Activity className="h-10 w-10 text-slate-650 mx-auto mb-4 animate-pulse" />
+              <h4 className="font-extrabold text-slate-400">Auditer state is empty</h4>
+              <p className="text-xs text-slate-500 mt-2 max-w-md mx-auto">Please enter a valid website URL in the topbar above and click <strong className="text-indigo-455">Run Scan</strong> to launch crawler passes.</p>
+            </div>
+          )}
+
+          {/* Targets Switcher Pill Bar */}
+          <div className="mt-12 pt-6 border-t border-slate-800/80 animate-fade-in-up">
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-widest block mb-2.5">Audited Targets (Previous Links Scan History)</span>
+            <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-thin">
+              {targets.length === 0 ? (
+                <span className="text-xs text-slate-500 italic">No targets audited yet. Enter a URL above and click Run Scan.</span>
+              ) : (
+                targets.map((tgt) => {
+                  const isActive = normalizeUrlString(url) === normalizeUrlString(tgt.url);
+                  return (
+                    <button
+                      key={tgt.url}
+                      onClick={() => { setUrl(tgt.url); fetchStats(tgt.url); }}
+                      className={`flex items-center gap-2 px-3.5 py-1.5 rounded-full border text-xs font-semibold cursor-pointer transition-all hover:scale-[1.02] active:scale-[0.98] shrink-0 ${
+                        isActive
+                          ? 'bg-indigo-500/10 border-indigo-500 text-indigo-400 shadow-md shadow-indigo-500/5'
+                          : 'bg-dark-800/60 border-slate-800 text-slate-400 hover:border-slate-700 hover:text-slate-200'
+                      }`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${tgt.isUp ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`}></span>
+                      <span>{tgt.url.replace(/^https?:\/\//i, '').replace(/\/$/, '')}</span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
           </div>
-        </div>
 
-      </main>
+        </main>
+      </div>
 
-      {/* Scan Progress Overlay */}
+      {/* ── SCAN PROGRESS OVERLAY ────────────────────────────────────────── */}
       {scanProgress && (
         <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/50 backdrop-blur-sm">
           <div className="glass-card rounded-2xl p-8 w-full max-w-sm mx-4 text-center shadow-2xl">
@@ -941,16 +978,10 @@ export default function App() {
               <h3 className="text-slate-200 font-extrabold text-base">Scanning Website</h3>
               <p className="text-xs text-slate-400 mt-1 truncate">{url}</p>
             </div>
-
-            {/* Step label */}
             <div className="flex items-center justify-center gap-2 mb-4">
               <span className="h-1.5 w-1.5 rounded-full bg-indigo-400 animate-ping" />
-              <span className="text-sm font-bold text-indigo-300">
-                ≡ƒöì {scanProgress.label}...
-              </span>
+              <span className="text-sm font-bold text-indigo-300">🔍 {scanProgress.label}...</span>
             </div>
-
-            {/* Progress bar */}
             <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700 mb-2">
               <div
                 className="h-full rounded-full bg-gradient-to-r from-indigo-600 to-indigo-400 transition-all duration-700 ease-out"
@@ -959,27 +990,25 @@ export default function App() {
             </div>
             <div className="flex justify-between text-[10px] text-slate-500 font-bold">
               <span>0%</span>
-              <span className={`font-black ${scanProgress.pct === 100 ? 'text-emerald-400' : 'text-indigo-400'}`}>
-                {scanProgress.pct}%
-              </span>
+              <span className={`font-black ${scanProgress.pct === 100 ? 'text-emerald-400' : 'text-indigo-400'}`}>{scanProgress.pct}%</span>
               <span>100%</span>
             </div>
-
-            <p className="text-[10px] text-slate-600 mt-4 italic">Please wait ΓÇö this usually takes 5ΓÇô15 seconds</p>
+            <p className="text-[10px] text-slate-600 mt-4 italic">Please wait — this usually takes 5–15 seconds</p>
           </div>
         </div>
       )}
 
-      {/* Floating SRE toast alert card overlay */}
+      {/* ── TOAST ────────────────────────────────────────────────────────── */}
       {toast && (
         <div className="fixed bottom-6 right-6 z-[99999] animate-fade">
-          <div className={`px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border text-xs font-bold ${toast.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' :
-              toast.type === 'error' ? 'bg-rose-500/10 text-rose-400 border-rose-500/30' :
-                'bg-indigo-500/10 text-indigo-400 border-indigo-500/30'
-            }`}>
-            {toast.type === 'success' && <ShieldCheck className="h-4.5 w-4.5" />}
-            {toast.type === 'error' && <AlertCircle className="h-4.5 w-4.5" />}
-            {toast.type === 'info' && <BellRing className="h-4.5 w-4.5 animate-bounce" />}
+          <div className={`px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 border text-xs font-bold ${
+            toast.type === 'success' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' :
+            toast.type === 'error'   ? 'bg-rose-500/10 text-rose-400 border-rose-500/30' :
+                                       'bg-indigo-500/10 text-indigo-400 border-indigo-500/30'
+          }`}>
+            {toast.type === 'success' && <ShieldCheck className="h-4 w-4" />}
+            {toast.type === 'error'   && <AlertCircle className="h-4 w-4" />}
+            {toast.type === 'info'    && <BellRing className="h-4 w-4 animate-bounce" />}
             <span>{toast.message}</span>
           </div>
         </div>
@@ -988,3 +1017,4 @@ export default function App() {
     </div>
   );
 }
+   
