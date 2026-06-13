@@ -201,49 +201,90 @@ export default function ImageOptimizationAnalyzer({ stats, crawlData, url, isDar
         // Await all requests in this batch concurrently
         await Promise.allSettled(
           batch.map(async (imgUrl) => {
-            try {
-              const response = await axios.post(
-                '/api/image-metadata',
-                { urls: [imgUrl], baseUrl: targetUrl },
-                { timeout: 15000 }
-              );
-              if (!isMounted) return;
+            // Retry up to 2 times on gateway/timeout errors (Render cold start)
+            let lastError = null;
+            for (let attempt = 1; attempt <= 2; attempt++) {
+              try {
+                const response = await axios.post(
+                  '/api/image-metadata',
+                  { urls: [imgUrl], baseUrl: targetUrl },
+                  { timeout: 20000 }
+                );
+                if (!isMounted) return;
 
-              const res = response.data?.results?.[0];
-              if (response.data?.success && res) {
-                // Use res.isValid to determine status, but also trust actualFileSize > 0
-                const valid = res.isValid || (res.actualFileSize > 0 && !res.errorReason);
-                setImageSizesMap(prev => ({
-                  ...prev,
-                  [imgUrl]: {
-                    contentLength:  res.contentLength,
-                    actualFileSize: res.actualFileSize,
-                    format:         res.format,
-                    success:        valid,
-                    isValid:        valid,
-                    httpStatus:     res.httpStatus,
-                    errorReason:    valid ? null : res.errorReason,
-                    status:         valid ? 'success' : 'failed'
-                  }
-                }));
-              } else {
-                setImageSizesMap(prev => ({
-                  ...prev,
-                  [imgUrl]: { isValid: false, status: 'failed', errorReason: 'No data returned' }
-                }));
+                const httpStatus = response.status;
+
+                // Vercel proxy errors (502/503/504) — server not yet awake, retry
+                if ((httpStatus === 502 || httpStatus === 503 || httpStatus === 504) && attempt < 2) {
+                  console.log(`[IMAGE FRONTEND] Proxy error ${httpStatus} for ${imgUrl} — retrying...`);
+                  await new Promise(r => setTimeout(r, 3000));
+                  continue;
+                }
+
+                const res = response.data?.results?.[0];
+                if (response.data?.success && res) {
+                  // Trust actualFileSize > 0 as the definitive validity check
+                  const valid = res.isValid || (res.actualFileSize > 0 && !res.errorReason);
+                  setImageSizesMap(prev => ({
+                    ...prev,
+                    [imgUrl]: {
+                      contentLength:  res.contentLength,
+                      actualFileSize: res.actualFileSize,
+                      format:         res.format,
+                      success:        valid,
+                      isValid:        valid,
+                      httpStatus:     res.httpStatus,
+                      errorReason:    valid ? null : res.errorReason,
+                      status:         valid ? 'success' : 'failed'
+                    }
+                  }));
+                } else {
+                  // API returned but with no result data
+                  const reason =
+                    httpStatus === 502 || httpStatus === 504 ? 'Server Unavailable (cold start)' :
+                    httpStatus === 503                       ? 'Service Unavailable' :
+                    response.data?.error                    ? response.data.error :
+                    'No data returned';
+                  setImageSizesMap(prev => ({
+                    ...prev,
+                    [imgUrl]: { isValid: false, status: 'failed', errorReason: reason }
+                  }));
+                }
+                return; // success — stop retry loop
+              } catch (err) {
+                lastError = err;
+                const isGatewayErr =
+                  err.response?.status === 502 ||
+                  err.response?.status === 503 ||
+                  err.response?.status === 504 ||
+                  err.code === 'ECONNABORTED';
+
+                if (isGatewayErr && attempt < 2) {
+                  console.log(`[IMAGE FRONTEND] Network error for ${imgUrl} (attempt ${attempt}) — retrying in 3s...`);
+                  await new Promise(r => setTimeout(r, 3000));
+                  continue;
+                }
+                break;
               }
-            } catch (err) {
-              if (!isMounted) return;
-              const reason =
-                err.response?.status === 404 ? '404 Not Found' :
-                err.response?.status === 403 ? 'Access Denied' :
-                err.code === 'ECONNABORTED'   ? 'Request Timeout' :
-                'Access Denied';
-              setImageSizesMap(prev => ({
-                ...prev,
-                [imgUrl]: { isValid: false, status: 'failed', errorReason: reason }
-              }));
             }
+
+            // All attempts exhausted
+            if (!isMounted) return;
+            const status = lastError?.response?.status;
+            const reason =
+              status === 404                                               ? '404 Not Found' :
+              status === 403 || status === 401                            ? 'Access Denied' :
+              status === 502 || status === 504                            ? 'Server Unavailable' :
+              status === 503                                              ? 'Service Unavailable' :
+              lastError?.code === 'ECONNABORTED'                          ? 'Request Timeout' :
+              lastError?.message?.includes('Network Error')               ? 'Network Error' :
+              lastError                                                   ? 'Access Denied' :
+              'Unknown Error';
+
+            setImageSizesMap(prev => ({
+              ...prev,
+              [imgUrl]: { isValid: false, status: 'failed', errorReason: reason }
+            }));
           })
         );
       }

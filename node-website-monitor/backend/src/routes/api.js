@@ -498,18 +498,47 @@ const fetchSingleImageMetadata = async (imageUrl, baseUrl = '') => {
   };
 };
 
+// Wrap fetchSingleImageMetadata with a hard timeout so one slow URL
+// can't block the entire batch for minutes
+const fetchWithTimeout = (imageUrl, baseUrl, timeoutMs = 18000) => {
+  return Promise.race([
+    fetchSingleImageMetadata(imageUrl, baseUrl),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs)
+    )
+  ]);
+};
+
 router.post('/image-metadata', async (req, res) => {
   const { urls, baseUrl } = req.body;
   if (!urls || !Array.isArray(urls)) {
     return res.status(400).json({ error: 'Array of image URLs is required in request body.' });
   }
 
-  try {
-    const results = await Promise.all(urls.map(url => fetchSingleImageMetadata(url, baseUrl)));
-    res.status(200).json({ success: true, results });
-  } catch (err) {
-    res.status(500).json({ error: `Image metadata fetch failed: ${err.message}` });
-  }
+  // Use allSettled so a single failing URL doesn't kill the whole batch
+  const settled = await Promise.allSettled(
+    urls.map(url => fetchWithTimeout(url, baseUrl))
+  );
+
+  const results = settled.map((outcome, i) => {
+    if (outcome.status === 'fulfilled') {
+      return outcome.value;
+    }
+    const msg = outcome.reason?.message || 'Fetch failed';
+    const isTimeout = msg.includes('Timeout');
+    return {
+      imageUrl:       urls[i],
+      contentLength:  null,
+      actualFileSize: 0,
+      format:         'png',
+      success:        false,
+      isValid:        false,
+      httpStatus:     null,
+      errorReason:    isTimeout ? 'Request Timeout' : msg,
+    };
+  });
+
+  res.status(200).json({ success: true, results });
 });
 
 module.exports = router;
