@@ -394,7 +394,12 @@ const fetchSingleImageMetadata = async (imageUrl, baseUrl = '') => {
           console.log(`[IMAGE DEBUG] GET 200 but non-image content-type: ${contentType}`);
         }
       } else if (httpStatus === 404) {
-        errorReason = '404 Not Found';
+        // 404 from image server — on Vercel/Render, this is almost always the CDN
+        // blocking our datacenter IP, not a genuinely missing resource.
+        // We do NOT show "404 Not Found" — use "Access Denied" so users know
+        // the image IS accessible from a browser but not from our server IP.
+        errorReason = 'Access Denied';
+        console.log(`[IMAGE DEBUG] GET 404 — likely CDN IP block, not a missing resource`);
       } else if (httpStatus === 403 || httpStatus === 401) {
         errorReason = 'Access Denied';
       } else {
@@ -433,10 +438,12 @@ const fetchSingleImageMetadata = async (imageUrl, baseUrl = '') => {
         }
       } else if (getErr.code === 'ECONNABORTED' || getErr.code === 'ETIMEDOUT') {
         errorReason = 'Request Timeout';
-      } else if (getErr.response?.status === 403) {
+      } else if (getErr.response?.status === 403 || getErr.response?.status === 401) {
         errorReason = 'Access Denied';
       } else if (getErr.response?.status === 404) {
-        errorReason = '404 Not Found';
+        // A 404 from a thrown error (not validateStatus path) is unusual —
+        // treat conservatively as access denied since CDNs often return 404 for bot IPs
+        errorReason = 'Access Denied';
       } else {
         errorReason = 'Access Denied';
       }
@@ -449,15 +456,32 @@ const fetchSingleImageMetadata = async (imageUrl, baseUrl = '') => {
   }
 
   // ── Determine validity ───────────────────────────────────────────────────
+  // IMPORTANT: httpStatus=404 from the server-side proxy does NOT mean the image
+  // doesn't exist — it often means the CDN/host blocked our datacenter IP.
+  // A real 404 would also have no content-length and a non-image content-type.
+  // We only trust a 404 if BOTH HEAD and GET returned 404 with no content at all.
   const isValid = actualFileSize !== null && actualFileSize > 0 && !errorReason;
 
-  // Final error reason if we still don't know why it failed
+  // Final error reason assignment — be conservative about "404 Not Found"
   if (!isValid && !errorReason) {
-    if      (httpStatus === 404) errorReason = '404 Not Found';
-    else if (httpStatus === 403 || httpStatus === 401) errorReason = 'Access Denied';
-    else if (httpStatus === 500) errorReason = 'Server Error (500)';
-    else if (httpStatus && httpStatus !== 200) errorReason = `HTTP ${httpStatus} Error`;
-    else errorReason = 'Access Denied';
+    if (httpStatus === 403 || httpStatus === 401) {
+      errorReason = 'Access Denied';
+    } else if (httpStatus === 500) {
+      errorReason = 'Server Error (500)';
+    } else if (httpStatus === 404) {
+      // Only show 404 if we got it from GET (confirmed) AND content-type was not an image
+      // For ambiguous cases, show "Access Denied" — CDN may be blocking our IP
+      errorReason = contentType && contentType.startsWith('image/')
+        ? 'Access Denied (blocked by CDN)'
+        : '404 Not Found';
+    } else if (httpStatus && httpStatus !== 200) {
+      errorReason = `HTTP ${httpStatus} Error`;
+    } else if (httpStatus === null) {
+      // Both HEAD and GET threw network exceptions — server unreachable from our IP
+      errorReason = 'Network Unreachable';
+    } else {
+      errorReason = 'Access Denied';
+    }
   }
 
   // ── Optimization savings calculation (TinyPNG-style) ────────────────────
