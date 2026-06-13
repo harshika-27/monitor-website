@@ -222,275 +222,279 @@ const axiosLib = require('axios');
 const httpsLib = require('https');
 const imageAgent = new httpsLib.Agent({ rejectUnauthorized: false });
 
+// Standard browser-like headers that pass most server checks
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Cache-Control': 'no-cache',
+};
+
 const fetchSingleImageMetadata = async (imageUrl, baseUrl = '') => {
   let resolvedUrl = imageUrl;
-  
-  // Resolve relative URL using baseUrl if possible
+
+  // Resolve relative URLs using baseUrl
   if (baseUrl && !/^https?:\/\//i.test(imageUrl)) {
     try {
       resolvedUrl = new URL(imageUrl, baseUrl).href;
-    } catch (e) {
-      // ignore parsing issues, fallback to imageUrl
-    }
+    } catch (e) { /* keep imageUrl */ }
   }
 
   if (!resolvedUrl || !/^https?:\/\//i.test(resolvedUrl)) {
     return {
-      imageUrl,
-      contentLength: null,
-      actualFileSize: 0,
-      format: 'png',
-      success: false,
-      isValid: false,
-      httpStatus: null,
-      errorReason: 'Access Denied'
+      imageUrl, contentLength: null, actualFileSize: 0,
+      format: 'png', success: false, isValid: false,
+      httpStatus: null, errorReason: 'Invalid URL'
     };
   }
 
   let contentLength = null;
   let actualFileSize = null;
-  let format = null;
-  let httpStatus = null;
-  let errorReason = null;
-  let contentType = '';
+  let format        = null;
+  let httpStatus    = null;
+  let errorReason   = null;
+  let contentType   = '';
   let downloadedBytes = 0;
 
-  // Helper to extract extension
+  console.log(`[IMAGE DEBUG] Fetching: ${resolvedUrl}`);
+
+  // ── Helper: detect format from URL path or Content-Type header ──────────
   const getFormatFromUrlOrHeaders = (urlStr, typeHeader) => {
     if (typeHeader) {
-      const type = typeHeader.toLowerCase();
-      if (type.includes('image/png')) return 'png';
-      if (type.includes('image/jpeg') || type.includes('image/jpg')) return 'jpg';
-      if (type.includes('image/gif')) return 'gif';
-      if (type.includes('image/webp')) return 'webp';
-      if (type.includes('image/svg') || type.includes('image/svg+xml')) return 'svg';
-      if (type.includes('image/avif')) return 'avif';
+      const t = typeHeader.toLowerCase();
+      if (t.includes('image/png'))  return 'png';
+      if (t.includes('image/jpeg') || t.includes('image/jpg')) return 'jpg';
+      if (t.includes('image/gif'))  return 'gif';
+      if (t.includes('image/webp')) return 'webp';
+      if (t.includes('image/svg'))  return 'svg';
+      if (t.includes('image/avif')) return 'avif';
     }
-    const parts = urlStr.split('?')[0].split('/');
-    const filename = parts.pop() || '';
-    const ext = filename.split('.').pop()?.toLowerCase();
-    if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'avif'].includes(ext)) {
+    const clean = urlStr.split('?')[0].split('#')[0];
+    const ext   = (clean.split('.').pop() || '').toLowerCase();
+    if (['png','jpg','jpeg','gif','webp','svg','avif'].includes(ext)) {
       return ext === 'jpeg' ? 'jpg' : ext;
     }
     return null;
   };
 
-  // 1. Try HEAD request first
+  // ── Helper: is this content type an image (or binary that might be one) ──
+  const isImageContentType = (ct, urlStr) => {
+    if (!ct) return !!getFormatFromUrlOrHeaders(urlStr, null); // rely on URL ext
+    const t = ct.toLowerCase();
+    if (t.startsWith('image/')) return true;
+    if (t.includes('application/octet-stream')) return !!getFormatFromUrlOrHeaders(urlStr, null);
+    return false;
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // STEP 1 — HEAD request (fast, no body download)
+  // ════════════════════════════════════════════════════════════════
+  let headSucceeded = false;
   try {
-    const headResponse = await axiosLib.head(resolvedUrl, {
-      timeout: 3000,
+    const headRes = await axiosLib.head(resolvedUrl, {
+      timeout: 6000,
       httpsAgent: imageAgent,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MonitorProSRE/1.0',
-        'Accept': 'image/*'
-      },
-      validateStatus: () => true
+      maxRedirects: 5,
+      headers: BROWSER_HEADERS,
+      validateStatus: () => true,  // never throw on HTTP error status
     });
 
-    httpStatus = headResponse.status;
+    httpStatus   = headRes.status;
+    contentType  = (headRes.headers['content-type'] || '').toLowerCase();
 
-    if (headResponse.status === 200) {
-      contentType = (headResponse.headers['content-type'] || '').toLowerCase();
-      // Accept image/* OR application/octet-stream (CDNs often serve images this way)
-      // Also accept if content-type is empty but URL has image extension
-      const urlFormat = getFormatFromUrlOrHeaders(resolvedUrl, null);
-      const isImageByContentType = contentType.startsWith('image/');
-      const isOctetStream = contentType.startsWith('application/octet-stream') || contentType === '';
-      const isImageByUrl = !!urlFormat;
+    console.log(`[IMAGE DEBUG] HEAD ${resolvedUrl} → ${httpStatus}, CT: ${contentType}`);
 
-      if (isImageByContentType || (isOctetStream && isImageByUrl)) {
-        format = getFormatFromUrlOrHeaders(resolvedUrl, isImageByContentType ? contentType : null) || urlFormat;
-        const cl = headResponse.headers['content-length'];
-        if (cl) {
-          const parsedLen = parseInt(cl, 10);
-          if (!isNaN(parsedLen) && parsedLen > 0) {
-            contentLength = parsedLen;
-            actualFileSize = parsedLen;
-          }
+    if (httpStatus === 200 && isImageContentType(contentType, resolvedUrl)) {
+      // Try to get size from Content-Length header
+      const cl = headRes.headers['content-length'];
+      if (cl) {
+        const parsed = parseInt(cl, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+          contentLength  = parsed;
+          actualFileSize = parsed;
+          format         = getFormatFromUrlOrHeaders(resolvedUrl, contentType) || 'png';
+          headSucceeded  = true;
+          console.log(`[IMAGE DEBUG] HEAD success — size from Content-Length: ${actualFileSize} bytes`);
         }
-        // If no content-length in HEAD, leave actualFileSize null so GET runs to download bytes
-      } else {
-        // Not a recognizable image — don't set errorReason here yet, let GET confirm
-        // (some servers return text/html on HEAD but serve images on GET)
-        errorReason = null;
       }
-    } else if (headResponse.status === 404) {
-      errorReason = '404 Not Found';
-    } else if (headResponse.status === 403) {
-      errorReason = 'Access Denied';
-    } else {
-      // Other statuses: let GET try as well, don't prematurely block
-      errorReason = null;
+      // Even without Content-Length, mark HEAD as confirming image exists
+      if (!headSucceeded) {
+        format = getFormatFromUrlOrHeaders(resolvedUrl, contentType) || 'png';
+        // actualFileSize still null → GET will download to get real size
+      }
     }
-  } catch (err) {
-    if (err.response) {
-      httpStatus = err.response.status;
-      if (httpStatus === 404) errorReason = '404 Not Found';
-      else if (httpStatus === 403) errorReason = 'Access Denied';
-    }
+    // For non-200 HEAD responses (404, 403, etc.) we still try GET below
+    // Many CDNs/servers block HEAD and return 405/403/404 even for valid images
+  } catch (headErr) {
+    console.log(`[IMAGE DEBUG] HEAD threw: ${headErr.message} — will try GET`);
+    // HEAD completely failed — proceed to GET unconditionally
   }
 
-  // 2. Try GET request if HEAD didn't yield file size or failed/blocked
+  // ════════════════════════════════════════════════════════════════
+  // STEP 2 — GET request
+  // Run if: no size from HEAD, OR HEAD gave a non-200, OR any error
+  // ════════════════════════════════════════════════════════════════
   if (actualFileSize === null) {
     try {
-      const getResponse = await axiosLib.get(resolvedUrl, {
-        timeout: 8000,
+      const getRes = await axiosLib.get(resolvedUrl, {
+        timeout: 15000,
         responseType: 'arraybuffer',
-        maxContentLength: 10 * 1024 * 1024, // cap at 10 MB to avoid hanging
+        maxContentLength: 25 * 1024 * 1024,  // 25 MB cap
+        maxBodyLength:    25 * 1024 * 1024,
+        maxRedirects: 5,
         httpsAgent: imageAgent,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) MonitorProSRE/1.0',
-          'Accept': 'image/*'
-        },
-        validateStatus: () => true
+        headers: BROWSER_HEADERS,
+        validateStatus: () => true,
       });
 
-      httpStatus = getResponse.status;
+      httpStatus  = getRes.status;
+      contentType = (getRes.headers['content-type'] || '').toLowerCase();
 
-      if (getResponse.status === 200) {
-        contentType = (getResponse.headers['content-type'] || '').toLowerCase();
-        const urlFormat = getFormatFromUrlOrHeaders(resolvedUrl, null);
-        const isImageByContentType = contentType.startsWith('image/');
-        const isOctetStream = contentType.startsWith('application/octet-stream') || contentType === '';
-        const isImageByUrl = !!urlFormat;
+      console.log(`[IMAGE DEBUG] GET ${resolvedUrl} → ${httpStatus}, CT: ${contentType}`);
 
-        if (isImageByContentType || (isOctetStream && isImageByUrl)) {
-          format = getFormatFromUrlOrHeaders(resolvedUrl, isImageByContentType ? contentType : null) || urlFormat;
-          const cl = getResponse.headers['content-length'];
+      if (httpStatus === 200) {
+        if (isImageContentType(contentType, resolvedUrl)) {
+          format = getFormatFromUrlOrHeaders(resolvedUrl, contentType) ||
+                   getFormatFromUrlOrHeaders(resolvedUrl, null) || 'png';
+
+          // Prefer Content-Length header if server sent it
+          const cl = getRes.headers['content-length'];
           if (cl) {
-            const parsedLen = parseInt(cl, 10);
-            if (!isNaN(parsedLen) && parsedLen > 0) {
-              contentLength = parsedLen;
+            const parsed = parseInt(cl, 10);
+            if (!isNaN(parsed) && parsed > 0) contentLength = parsed;
+          }
+
+          // Measure actual downloaded bytes (handles Buffer and ArrayBuffer)
+          if (getRes.data) {
+            if (Buffer.isBuffer(getRes.data)) {
+              downloadedBytes = getRes.data.length;
+            } else if (getRes.data.byteLength !== undefined) {
+              downloadedBytes = getRes.data.byteLength;
+            } else {
+              downloadedBytes = getRes.data.length || 0;
             }
           }
-          if (getResponse.data) {
-            // Buffer.byteLength is the correct method for arraybuffer in Node.js
-            // Support both Buffer (.length) and ArrayBuffer (.byteLength)
-            if (Buffer.isBuffer(getResponse.data)) {
-              downloadedBytes = getResponse.data.length;
-            } else if (getResponse.data.byteLength !== undefined) {
-              downloadedBytes = getResponse.data.byteLength;
-            } else {
-              downloadedBytes = getResponse.data.length || 0;
-            }
-            if (downloadedBytes > 0) {
-              actualFileSize = downloadedBytes;
-              errorReason = null; // clear any error from HEAD stage — GET succeeded
-            } else {
-              errorReason = errorReason || 'Empty response body';
-            }
+
+          // Use downloaded bytes as the authoritative size (more accurate than Content-Length)
+          if (downloadedBytes > 0) {
+            actualFileSize = downloadedBytes;
+            errorReason    = null;
+            console.log(`[IMAGE DEBUG] GET success — size: ${actualFileSize} bytes`);
+          } else if (contentLength && contentLength > 0) {
+            // Fallback: use Content-Length if body was empty for some reason
+            actualFileSize = contentLength;
+            errorReason    = null;
+            console.log(`[IMAGE DEBUG] GET — using Content-Length fallback: ${actualFileSize} bytes`);
+          } else {
+            errorReason = 'Empty response body';
           }
         } else {
-          // Server returned non-image content on GET — confirm it's not an image URL
-          errorReason = 'Not an image (Content-Type: ' + (contentType || 'unknown') + ')';
+          // 200 but not an image (HTML page, redirect page, etc.)
+          errorReason = `Not an image (Content-Type: ${contentType || 'unknown'})`;
+          console.log(`[IMAGE DEBUG] GET 200 but non-image content-type: ${contentType}`);
         }
-      } else if (getResponse.status === 404) {
+      } else if (httpStatus === 404) {
         errorReason = '404 Not Found';
-      } else if (getResponse.status === 403) {
+      } else if (httpStatus === 403 || httpStatus === 401) {
         errorReason = 'Access Denied';
       } else {
-        errorReason = 'Access Denied';
+        errorReason = `HTTP ${httpStatus}`;
       }
-    } catch (err) {
-      if (err.response) {
-        httpStatus = err.response.status;
-        if (httpStatus === 404) errorReason = '404 Not Found';
-        else if (httpStatus === 403) errorReason = 'Access Denied';
-      }
-      // If axios threw because maxContentLength was exceeded, the image is real but very large.
-      // In that case try to use content-length from the error response headers if available.
-      if (err.code === 'ERR_FR_MAX_BODY_LENGTH_EXCEEDED' || (err.message && err.message.includes('maxContentLength'))) {
-        const errHeaders = err.response?.headers || {};
-        const cl = errHeaders['content-length'];
-        if (cl) {
-          const parsedLen = parseInt(cl, 10);
-          if (!isNaN(parsedLen) && parsedLen > 0) {
-            actualFileSize = parsedLen;
-            contentLength = parsedLen;
-            errorReason = null;
+    } catch (getErr) {
+      console.log(`[IMAGE DEBUG] GET threw: ${getErr.code} — ${getErr.message}`);
+
+      // maxContentLength exceeded — image IS real but too large to fully download
+      const isOverLimit =
+        getErr.code === 'ERR_FR_MAX_BODY_LENGTH_EXCEEDED' ||
+        (getErr.message || '').includes('maxContentLength') ||
+        (getErr.message || '').includes('maxBodyLength');
+
+      if (isOverLimit) {
+        // Try to get size from the Content-Length header in the error response
+        const errCL = getErr.response?.headers?.['content-length'];
+        if (errCL) {
+          const parsed = parseInt(errCL, 10);
+          if (!isNaN(parsed) && parsed > 0) {
+            actualFileSize = parsed;
+            contentLength  = parsed;
+            format         = getFormatFromUrlOrHeaders(resolvedUrl, null) || 'png';
+            errorReason    = null;
+            httpStatus     = 200;
+            console.log(`[IMAGE DEBUG] Over limit — using Content-Length: ${actualFileSize} bytes`);
           }
         }
-      }
-      if (!errorReason && actualFileSize === null) {
+        if (actualFileSize === null) {
+          // Last resort: we know it's >25 MB
+          actualFileSize = 25 * 1024 * 1024;
+          format         = getFormatFromUrlOrHeaders(resolvedUrl, null) || 'png';
+          errorReason    = null;
+          httpStatus     = 200;
+          console.log(`[IMAGE DEBUG] Over limit — using 25 MB fallback`);
+        }
+      } else if (getErr.code === 'ECONNABORTED' || getErr.code === 'ETIMEDOUT') {
+        errorReason = 'Request Timeout';
+      } else if (getErr.response?.status === 403) {
+        errorReason = 'Access Denied';
+      } else if (getErr.response?.status === 404) {
+        errorReason = '404 Not Found';
+      } else {
         errorReason = 'Access Denied';
       }
     }
   }
 
-  // Ensure format fallback
+  // ── Format fallback ──────────────────────────────────────────────────────
   if (!format) {
     format = getFormatFromUrlOrHeaders(resolvedUrl, null) || 'png';
   }
 
+  // ── Determine validity ───────────────────────────────────────────────────
   const isValid = actualFileSize !== null && actualFileSize > 0 && !errorReason;
 
+  // Final error reason if we still don't know why it failed
   if (!isValid && !errorReason) {
-    if (httpStatus === 404) errorReason = '404 Not Found';
-    else if (httpStatus === 403) errorReason = 'Access Denied (403 Forbidden)';
-    else if (httpStatus === 401) errorReason = 'Access Denied (401 Unauthorized)';
+    if      (httpStatus === 404) errorReason = '404 Not Found';
+    else if (httpStatus === 403 || httpStatus === 401) errorReason = 'Access Denied';
     else if (httpStatus === 500) errorReason = 'Server Error (500)';
     else if (httpStatus && httpStatus !== 200) errorReason = `HTTP ${httpStatus} Error`;
     else errorReason = 'Access Denied';
   }
 
-  const formatLower = (format || '').toLowerCase();
-  let savingsPct = 0;
+  // ── Optimization savings calculation (TinyPNG-style) ────────────────────
+  const fmt = (format || '').toLowerCase();
+  let reduction     = 0;
   let recommendedSize = actualFileSize || 0;
-  let savingsBytes = 0;
-  
+  let savingsBytes  = 0;
+  let savingsPct    = 0;
+
   if (isValid && actualFileSize > 0) {
-    let reduction = 0;
-    // PNG: WebP conversion — 40%–80% savings
-    if (formatLower === 'png') {
-      reduction = Math.min(0.80, 0.40 + (actualFileSize / (1024 * 1024)) * 0.40);
-    // JPEG/JPG: compression — 20%–70% savings
-    } else if (formatLower === 'jpg' || formatLower === 'jpeg') {
-      reduction = Math.min(0.70, 0.20 + (actualFileSize / (1024 * 1024)) * 0.50);
-    // GIF: WebP/MP4 conversion — 50%–90% savings
-    } else if (formatLower === 'gif') {
-      reduction = Math.min(0.90, 0.50 + (actualFileSize / (2 * 1024 * 1024)) * 0.40);
-    // SVG: minification only — 5%–30% savings
-    } else if (formatLower === 'svg') {
-      reduction = Math.min(0.30, 0.05 + (actualFileSize / (100 * 1024)) * 0.25);
-    // WebP: already modern — minimal 5%
-    } else if (formatLower === 'webp') {
-      reduction = 0.05;
-    // AVIF: already optimized — no savings
-    } else if (formatLower === 'avif') {
-      reduction = 0.0;
-    } else {
-      reduction = 0.10;
-    }
+    if      (fmt === 'png')              reduction = Math.min(0.80, 0.40 + (actualFileSize / (1024*1024)) * 0.40);
+    else if (fmt === 'jpg' || fmt === 'jpeg') reduction = Math.min(0.70, 0.20 + (actualFileSize / (1024*1024)) * 0.50);
+    else if (fmt === 'gif')              reduction = Math.min(0.90, 0.50 + (actualFileSize / (2*1024*1024)) * 0.40);
+    else if (fmt === 'svg')              reduction = Math.min(0.30, 0.05 + (actualFileSize / (100*1024)) * 0.25);
+    else if (fmt === 'webp')             reduction = 0.05;
+    else if (fmt === 'avif')             reduction = 0.0;
+    else                                 reduction = 0.10;
+
     recommendedSize = Math.round(actualFileSize * (1 - reduction));
-    savingsPct = Math.round(reduction * 100);
-    savingsBytes = actualFileSize - recommendedSize;
+    savingsPct      = Math.round(reduction * 100);
+    savingsBytes    = actualFileSize - recommendedSize;
   }
 
-  // Debug logging
-  console.log(`[IMAGE DEBUG] Image URL: ${imageUrl}`);
-  if (resolvedUrl !== imageUrl) {
-    console.log(`[IMAGE DEBUG] Resolved URL: ${resolvedUrl}`);
-  }
-  console.log(`[IMAGE DEBUG] HTTP Status: ${httpStatus}`);
-  console.log(`[IMAGE DEBUG] Content-Type: ${contentType}`);
-  console.log(`[IMAGE DEBUG] Content-Length: ${contentLength}`);
-  console.log(`[IMAGE DEBUG] Downloaded Bytes: ${downloadedBytes}`);
-  console.log(`[IMAGE DEBUG] Calculated Original Size: ${actualFileSize}`);
-  console.log(`[IMAGE DEBUG] Calculated Recommended Size: ${recommendedSize}`);
-  console.log(`[IMAGE DEBUG] Calculated Savings: ${savingsBytes} bytes (${savingsPct}%)`);
+  console.log(`[IMAGE DEBUG] RESULT → isValid:${isValid} size:${actualFileSize} format:${format} error:${errorReason}`);
 
   return {
     imageUrl,
     contentLength,
     actualFileSize: actualFileSize || 0,
     recommendedSize: isValid ? recommendedSize : 0,
-    savingsBytes: isValid ? savingsBytes : 0,
-    savingsPct: isValid ? savingsPct : 0,
+    savingsBytes:   isValid ? savingsBytes   : 0,
+    savingsPct:     isValid ? savingsPct     : 0,
     format,
-    success: isValid,
+    success:     isValid,
     httpStatus,
     isValid,
-    errorReason: isValid ? null : errorReason
+    errorReason: isValid ? null : errorReason,
   };
 };
 

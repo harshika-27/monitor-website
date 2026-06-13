@@ -176,73 +176,83 @@ export default function ImageOptimizationAnalyzer({ stats, crawlData, url, isDar
   useEffect(() => {
     if (rawImageUrls.length === 0) {
       setImageSizesMap({});
+      setLoadingSizes(false);
       return;
     }
 
     let isMounted = true;
+
     const fetchSizes = async () => {
       setLoadingSizes(true);
-      
-      // Initialize map with pending statuses
-      const initialMap = {};
-      rawImageUrls.forEach(url => {
-        initialMap[url] = { isValid: false, status: 'pending' };
-      });
-      setImageSizesMap(initialMap);
 
-      try {
-        // Fetch each URL individually in parallel
-        rawImageUrls.forEach(async (imgUrl) => {
-          try {
-            const response = await axios.post('/api/image-metadata', { urls: [imgUrl], baseUrl: targetUrl });
-            if (isMounted && response.data?.success && response.data.results?.[0]) {
-              const res = response.data.results[0];
-              setImageSizesMap(prev => ({
-                ...prev,
-                [imgUrl]: {
-                  contentLength: res.contentLength,
-                  actualFileSize: res.actualFileSize,
-                  format: res.format,
-                  success: res.success,
-                  isValid: res.isValid,
-                  httpStatus: res.httpStatus,
-                  errorReason: res.errorReason,
-                  status: res.isValid ? 'success' : 'failed'
-                }
-              }));
-            } else {
-              if (isMounted) {
+      // Mark all URLs as pending
+      const initialMap = {};
+      rawImageUrls.forEach(u => {
+        initialMap[u] = { isValid: false, status: 'pending' };
+      });
+      if (isMounted) setImageSizesMap(initialMap);
+
+      // ── Send in batches of 5 to avoid overwhelming the server ──
+      const BATCH = 5;
+      for (let i = 0; i < rawImageUrls.length; i += BATCH) {
+        if (!isMounted) break;
+        const batch = rawImageUrls.slice(i, i + BATCH);
+
+        // Await all requests in this batch concurrently
+        await Promise.allSettled(
+          batch.map(async (imgUrl) => {
+            try {
+              const response = await axios.post(
+                '/api/image-metadata',
+                { urls: [imgUrl], baseUrl: targetUrl },
+                { timeout: 15000 }
+              );
+              if (!isMounted) return;
+
+              const res = response.data?.results?.[0];
+              if (response.data?.success && res) {
+                // Use res.isValid to determine status, but also trust actualFileSize > 0
+                const valid = res.isValid || (res.actualFileSize > 0 && !res.errorReason);
                 setImageSizesMap(prev => ({
                   ...prev,
-                  [imgUrl]: { isValid: false, status: 'failed', errorReason: 'Access Denied' }
+                  [imgUrl]: {
+                    contentLength:  res.contentLength,
+                    actualFileSize: res.actualFileSize,
+                    format:         res.format,
+                    success:        valid,
+                    isValid:        valid,
+                    httpStatus:     res.httpStatus,
+                    errorReason:    valid ? null : res.errorReason,
+                    status:         valid ? 'success' : 'failed'
+                  }
+                }));
+              } else {
+                setImageSizesMap(prev => ({
+                  ...prev,
+                  [imgUrl]: { isValid: false, status: 'failed', errorReason: 'No data returned' }
                 }));
               }
-            }
-          } catch (err) {
-            if (isMounted) {
-              let reason = 'Access Denied';
-              if (err.response && err.response.status === 404) {
-                reason = '404 Not Found';
-              }
+            } catch (err) {
+              if (!isMounted) return;
+              const reason =
+                err.response?.status === 404 ? '404 Not Found' :
+                err.response?.status === 403 ? 'Access Denied' :
+                err.code === 'ECONNABORTED'   ? 'Request Timeout' :
+                'Access Denied';
               setImageSizesMap(prev => ({
                 ...prev,
                 [imgUrl]: { isValid: false, status: 'failed', errorReason: reason }
               }));
             }
-          }
-        });
-      } catch (err) {
-        console.error("Failed to start image sizes fetch:", err);
-      } finally {
-        if (isMounted) setLoadingSizes(false);
+          })
+        );
       }
+
+      if (isMounted) setLoadingSizes(false);
     };
 
     fetchSizes();
-
-    return () => {
-      isMounted = false;
-    };
+    return () => { isMounted = false; };
   }, [rawImageUrls, targetUrl]);
 
   // 2. Build and Enrich Image List
