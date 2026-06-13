@@ -198,33 +198,37 @@ export default function ImageOptimizationAnalyzer({ stats, crawlData, url, isDar
         if (!isMounted) break;
         const batch = rawImageUrls.slice(i, i + BATCH);
 
-        // Await all requests in this batch concurrently
         await Promise.allSettled(
           batch.map(async (imgUrl) => {
-            // Retry up to 2 times on gateway/timeout errors (Render cold start)
             let lastError = null;
             for (let attempt = 1; attempt <= 2; attempt++) {
               try {
+                console.log(`[IMG FRONTEND] Attempt ${attempt} — POST /api/image-metadata for: ${imgUrl}`);
+                const t0 = Date.now();
+
                 const response = await axios.post(
                   '/api/image-metadata',
                   { urls: [imgUrl], baseUrl: targetUrl },
-                  { timeout: 20000 }
+                  { timeout: 25000 }
                 );
+
+                const elapsed = Date.now() - t0;
+                console.log(`[IMG FRONTEND] Response in ${elapsed}ms — HTTP ${response.status} for: ${imgUrl}`);
+
                 if (!isMounted) return;
 
                 const httpStatus = response.status;
 
-                // Vercel proxy errors (502/503/504) — server not yet awake, retry
                 if ((httpStatus === 502 || httpStatus === 503 || httpStatus === 504) && attempt < 2) {
-                  console.log(`[IMAGE FRONTEND] Proxy error ${httpStatus} for ${imgUrl} — retrying...`);
+                  console.log(`[IMG FRONTEND] Proxy error ${httpStatus} — retrying in 3s...`);
                   await new Promise(r => setTimeout(r, 3000));
                   continue;
                 }
 
                 const res = response.data?.results?.[0];
                 if (response.data?.success && res) {
-                  // Trust actualFileSize > 0 as the definitive validity check
                   const valid = res.isValid || (res.actualFileSize > 0 && !res.errorReason);
+                  console.log(`[IMG FRONTEND] Result — valid:${valid} size:${res.actualFileSize} format:${res.format} err:${res.errorReason} for: ${imgUrl}`);
                   setImageSizesMap(prev => ({
                     ...prev,
                     [imgUrl]: {
@@ -239,20 +243,22 @@ export default function ImageOptimizationAnalyzer({ stats, crawlData, url, isDar
                     }
                   }));
                 } else {
-                  // API returned but with no result data
                   const reason =
                     httpStatus === 502 || httpStatus === 504 ? 'Server Unavailable (cold start)' :
                     httpStatus === 503                       ? 'Service Unavailable' :
                     response.data?.error                    ? response.data.error :
                     'No data returned';
+                  console.warn(`[IMG FRONTEND] No result data — reason: ${reason} for: ${imgUrl}`);
                   setImageSizesMap(prev => ({
                     ...prev,
                     [imgUrl]: { isValid: false, status: 'failed', errorReason: reason }
                   }));
                 }
-                return; // success — stop retry loop
+                return;
               } catch (err) {
                 lastError = err;
+                console.error(`[IMG FRONTEND] Catch attempt ${attempt} — ${err.code || err.message} status:${err.response?.status} for: ${imgUrl}`);
+
                 const isGatewayErr =
                   err.response?.status === 502 ||
                   err.response?.status === 503 ||
@@ -260,7 +266,7 @@ export default function ImageOptimizationAnalyzer({ stats, crawlData, url, isDar
                   err.code === 'ECONNABORTED';
 
                 if (isGatewayErr && attempt < 2) {
-                  console.log(`[IMAGE FRONTEND] Network error for ${imgUrl} (attempt ${attempt}) — retrying in 3s...`);
+                  console.log(`[IMG FRONTEND] Gateway error — retrying in 3s...`);
                   await new Promise(r => setTimeout(r, 3000));
                   continue;
                 }
@@ -268,7 +274,6 @@ export default function ImageOptimizationAnalyzer({ stats, crawlData, url, isDar
               }
             }
 
-            // All attempts exhausted
             if (!isMounted) return;
             const status = lastError?.response?.status;
             const reason =
@@ -281,6 +286,7 @@ export default function ImageOptimizationAnalyzer({ stats, crawlData, url, isDar
               lastError                                                   ? 'Access Denied' :
               'Unknown Error';
 
+            console.error(`[IMG FRONTEND] All attempts failed — final reason: ${reason} for: ${imgUrl}`);
             setImageSizesMap(prev => ({
               ...prev,
               [imgUrl]: { isValid: false, status: 'failed', errorReason: reason }

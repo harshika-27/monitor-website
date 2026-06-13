@@ -3,7 +3,16 @@
   "buildCommand": "npm run build",
   "outputDirectory": "build",
   "installCommand": "npm install",
+  "functions": {
+    "api/image-metadata.js": {
+      "maxDuration": 30
+    }
+  },
   "rewrites": [
+    {
+      "source": "/api/image-metadata",
+      "destination": "/api/image-metadata.js"
+    },
     {
       "source": "/api/:path*",
       "destination": "https://monitor-hg6i.onrender.com/api/:path*"
