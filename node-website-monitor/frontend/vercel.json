@@ -11,7 +11,7 @@
   "rewrites": [
     {
       "source": "/api/image-metadata",
-      "destination": "/api/image-metadata.js"
+      "destination": "/api/image-metadata"
     },
     {
       "source": "/api/:path*",

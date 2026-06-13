@@ -152,7 +152,7 @@ async function fetchImageMetadata(imageUrl, baseUrl) {
 
   // ── STEP 1: HEAD ──────────────────────────────────────────────────────────
   try {
-    const head = await makeRequest(resolvedUrl, 'HEAD', 6000);
+    const head = await makeRequest(resolvedUrl, 'HEAD', 4000);
     httpStatus  = head.status;
     contentType = (head.headers['content-type'] || '').toLowerCase();
 
@@ -177,7 +177,7 @@ async function fetchImageMetadata(imageUrl, baseUrl) {
   // ── STEP 2: GET (if HEAD didn't give us a size) ───────────────────────────
   if (actualFileSize === null) {
     try {
-      const get = await makeRequest(resolvedUrl, 'GET', 12000);
+      const get = await makeRequest(resolvedUrl, 'GET', 5000);
       httpStatus  = get.status;
       contentType = (get.headers['content-type'] || '').toLowerCase();
 
@@ -267,6 +267,26 @@ async function fetchImageMetadata(imageUrl, baseUrl) {
   };
 }
 
+// ── Body parser helper (Vercel does NOT auto-parse JSON bodies) ──────────────
+function parseBody(req) {
+  return new Promise((resolve, reject) => {
+    // Already parsed by a middleware (e.g. during local testing via Express)
+    if (req.body && typeof req.body === 'object') {
+      return resolve(req.body);
+    }
+    let raw = '';
+    req.on('data', (chunk) => { raw += chunk; });
+    req.on('end', () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (e) {
+        reject(new Error('Invalid JSON body'));
+      }
+    });
+    req.on('error', reject);
+  });
+}
+
 // ── Vercel Serverless Function handler ───────────────────────────────────────
 module.exports = async (req, res) => {
   // CORS — allow requests from any Vercel deployment
@@ -284,7 +304,16 @@ module.exports = async (req, res) => {
     return;
   }
 
-  const { urls, baseUrl } = req.body || {};
+  // Parse body manually — Vercel serverless functions do not auto-parse JSON
+  let body;
+  try {
+    body = await parseBody(req);
+  } catch (e) {
+    res.status(400).json({ error: 'Invalid JSON body' });
+    return;
+  }
+
+  const { urls, baseUrl } = body;
   if (!urls || !Array.isArray(urls)) {
     res.status(400).json({ error: 'Array of image URLs is required.' });
     return;
@@ -292,8 +321,15 @@ module.exports = async (req, res) => {
 
   console.log(`[IMG API] Processing ${urls.length} URL(s), baseUrl: ${baseUrl}`);
 
+  // Wrap each fetch with a hard 9s timeout so one slow URL
+  // can't blow past Vercel Hobby's 10s function limit
+  const withTimeout = (fn, ms) => Promise.race([
+    fn,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms`)), ms))
+  ]);
+
   const settled = await Promise.allSettled(
-    urls.map(u => fetchImageMetadata(u, baseUrl || ''))
+    urls.map(u => withTimeout(fetchImageMetadata(u, baseUrl || ''), 9000))
   );
 
   const results = settled.map((outcome, i) => {
