@@ -2,7 +2,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
-import { ShieldCheck, ShieldAlert, Activity, Cpu, Search, RefreshCw, AlertTriangle, AlertCircle, BellRing, Sun, Moon, X, Clock, Star, Menu, BarChart2, Globe, Shield, Image as ImageIcon, Eye, Layers, Mail, Settings } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Activity, Cpu, Search, RefreshCw, AlertTriangle, AlertCircle, BellRing, Sun, Moon, X, Clock, Star, Menu, BarChart2, Globe, Shield, Image as ImageIcon, Eye, Layers, Mail, Settings, CalendarClock } from 'lucide-react';
 import UptimeDashboard from './components/UptimeDashboard';
 import WordPressDashboard from './components/WordPressDashboard';
 import SSLMonitor from './components/SSLMonitor';
@@ -16,6 +16,7 @@ import MalwareReport from './components/MalwareReport';
 import ImageOptimization from './components/ImageOptimization';
 import ImageOptimizationAnalyzer from './components/ImageOptimizationAnalyzer';
 import AdminLogin from './components/AdminLogin';
+import DomainExpiryDashboard from './components/DomainExpiryDashboard';
 
 // ── Error Boundary — catches render errors in dropdown/child components
 // without blanking the entire page ──────────────────────────────────────────
@@ -779,6 +780,7 @@ export default function App() {
               { id: 'image_analyzer', label: 'Image Optimization',         icon: ImageIcon },
               { id: 'accessibility',  label: 'Accessibility',              icon: Eye },
               { id: 'wordpress',      label: 'WordPress CMS',              icon: Layers },
+              { id: 'domain_expiry',  label: 'Domain Expiry',              icon: CalendarClock },
               { id: 'email_alerts',   label: 'Email Alerts',               icon: Mail },
               { id: 'settings',       label: 'Gmail & Alerts',             icon: Settings },
             ].map(({ id, label, icon: Icon }) => (
@@ -877,6 +879,8 @@ export default function App() {
             <SettingsPanel showToast={showToast} />
           ) : activeTab === 'email_alerts' ? (
             <EmailAlertSettings siteUrl={stats?.url || url} showToast={showToast} />
+          ) : activeTab === 'domain_expiry' ? (
+            <DomainExpiryDashboard isDark={isDark} />
           ) : (loading && !stats) || initializing ? (
             <div className="py-24 text-center animate-fade-in-up">
               <RefreshCw className="h-8 w-8 text-indigo-500 rotate-infinite mx-auto mb-4" />
